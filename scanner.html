@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scanner Absensi Persis Bangil</title>
+<style>
+:root{--g9:#0b3d2e;--g7:#12664b;--gold:#e5c068;--ok:#1f8a5b;--bad:#c0392b}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#0c1b15;color:#fff;min-height:100vh;display:flex;flex-direction:column}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:max(12px,env(safe-area-inset-top)) 14px 10px;background:var(--g9)}
+header b{font-size:16px}
+header small{display:block;color:var(--gold);font-size:12px}
+.seg{display:flex;border:1px solid rgba(255,255,255,.3);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:none;color:#fff;padding:9px 16px;font-weight:700;font-size:14px}
+.seg button.on{background:var(--gold);color:#2b1f00}
+#reader{width:100%;max-width:520px;margin:0 auto;min-height:260px;background:#000}
+#res{margin:12px;padding:16px;border-radius:14px;background:#1b2b24;text-align:center;font-size:15px;color:#b8cbc2;transition:background .2s}
+#res b{display:block;font-size:22px;color:#fff;margin-bottom:2px}
+#res.ok{background:var(--ok)}#res.ok *{color:#fff}
+#res.bad{background:var(--bad)}#res.bad *{color:#fff}
+.row{display:flex;gap:8px;margin:0 12px 10px}
+select,input{flex:1;min-width:0;padding:12px;border-radius:10px;border:0;font-size:16px}
+button.act{padding:12px 16px;border:0;border-radius:10px;font-weight:700;font-size:15px;background:var(--g7);color:#fff}
+ul{list-style:none;margin:0;padding:0 12px 24px;font-size:14px}
+li{padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.1);display:flex;justify-content:space-between;gap:8px}
+li.bad span:last-child{color:#ff9d92}li.ok span:last-child{color:#7ee0ae}
+</style>
+</head>
+<body>
+<header>
+  <div><b>Scanner Absensi</b><small id="sub">Persis Bangil</small></div>
+  <div class="seg"><button id="mMasuk" class="on">Masuk</button><button id="mPulang">Pulang</button></div>
+</header>
+
+<div id="reader"></div>
+<div id="res">Memuat…</div>
+
+<div class="row"><select id="kls" aria-label="Kelas"></select><button class="act" id="flip">Ganti kamera</button></div>
+<form class="row" id="mf"><input id="nisn" inputmode="numeric" placeholder="Atau ketik NISN"><button class="act">Catat</button></form>
+<ul id="log"></ul>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const q = new URLSearchParams(location.hash.slice(1));
+const SS = { get: k => { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set: (k, v) => { try { sessionStorage.setItem(k, v); } catch (e) {} } };
+if (q.get('t')) {                       // simpan lalu hapus token dari address bar
+  ['t', 'u', 'k', 'm'].forEach(k => SS.set(k, q.get(k) || ''));
+  history.replaceState(null, '', location.pathname);
+}
+const TOKEN = SS.get('t'), EXEC = SS.get('u');
+let MODE = SS.get('m') === 'pulang' ? 'pulang' : 'masuk', facing = 'environment', scanner = null, last = '', lastAt = 0, ctx = null;
+
+function show(cls, title, msg) { const r = $('#res'); r.className = cls; r.innerHTML = '<b></b><span></span>'; r.firstChild.textContent = title; r.lastChild.textContent = msg || ''; }
+function setMode(m) { MODE = m; SS.set('m', m); $('#mMasuk').classList.toggle('on', m === 'masuk'); $('#mPulang').classList.toggle('on', m === 'pulang'); }
+function beep(ok) {
+  try {
+    ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = ok ? 880 : 220; g.gain.value = .15; o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + (ok ? .12 : .3));
+  } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(ok ? 60 : [120, 60, 120]);
+}
+
+async function api(action, p) {
+  const r = await fetch(EXEC, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ token: TOKEN, action, p }) });
+  const j = await r.json();
+  if (!j.ok) throw new Error(j.error === 'SESI_HABIS' ? 'Sesi habis. Buka ulang scanner dari aplikasi absensi.' : j.error);
+  return j.data;
+}
+
+async function submit(nisn) {
+  if (!$('#kls').value) { show('bad', 'Pilih kelas dulu', ''); return; }
+  try {
+    const [r] = await api('absen.batch', { kelas: $('#kls').value, mode: MODE, nisns: [nisn] });
+    show(r.ok ? 'ok' : 'bad', r.nama || nisn, r.msg); beep(r.ok);
+    const li = document.createElement('li'); li.className = r.ok ? 'ok' : 'bad';
+    li.innerHTML = '<span></span><span></span>'; li.children[0].textContent = r.nama || nisn; li.children[1].textContent = r.msg;
+    $('#log').prepend(li); while ($('#log').children.length > 10) $('#log').lastChild.remove();
+  } catch (e) { show('bad', 'Gagal mencatat', e.message); beep(false); }
+}
+function onCode(txt) {
+  const n = String(txt).trim();
+  if (!n || (n === last && Date.now() - lastAt < 3000)) return;
+  last = n; lastAt = Date.now(); submit(n);
+}
+
+async function startCam() {
+  if (scanner) { try { await scanner.stop(); scanner.clear(); } catch (e) {} }
+  scanner = new Html5Qrcode('reader');
+  try {
+    await scanner.start({ facingMode: facing }, { fps: 10, qrbox: { width: 240, height: 240 } }, onCode, () => {});
+    show('', 'Siap memindai', 'Arahkan kamera ke QR kartu santri');
+  } catch (e) {
+    show('bad', 'Kamera tidak bisa dibuka', 'Pastikan halaman ini HTTPS dan izin kamera diberikan di browser. Anda tetap bisa mengetik NISN di bawah.');
+  }
+}
+
+async function init() {
+  if (!TOKEN || !EXEC) { show('bad', 'Tautan tidak lengkap', 'Buka halaman ini lewat tombol “Buka scanner HP” di aplikasi absensi.'); return; }
+  try {
+    const list = await api('kelas.list');
+    $('#kls').innerHTML = list.map(k => `<option>${k.replace(/[&<>"]/g, '')}</option>`).join('');
+    const k = SS.get('k'); if (k && list.includes(k)) $('#kls').value = k;
+  } catch (e) { show('bad', 'Tidak bisa terhubung', e.message); return; }
+  setMode(MODE); startCam();
+}
+$('#mMasuk').onclick = () => setMode('masuk');
+$('#mPulang').onclick = () => setMode('pulang');
+$('#kls').onchange = e => SS.set('k', e.target.value);
+$('#flip').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; startCam(); };
+$('#mf').onsubmit = e => { e.preventDefault(); const n = $('#nisn').value.trim(); if (n) { $('#nisn').value = ''; submit(n); } };
+init();
+</script>
+</body>
+</html>
