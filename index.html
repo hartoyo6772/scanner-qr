@@ -119,7 +119,7 @@ async function startCam() {
 async function init() {
   if (!TOKEN || !EXEC) { show('bad', 'Tautan tidak lengkap', 'Buka halaman ini lewat tombol “Buka scanner HP” di aplikasi absensi.'); return; }
   try {
-    const list = await api('kelas.list');
+    const list = await api('kelas.absen');
     $('#kls').innerHTML = list.map(k => `<option>${k.replace(/[&<>"]/g, '')}</option>`).join('');
     const k = SS.get('k'); if (k && list.includes(k)) $('#kls').value = k;
   } catch (e) { show('bad', 'Tidak bisa terhubung', e.message); return; }
