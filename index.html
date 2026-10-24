@@ -17,9 +17,9 @@ header small{display:block;color:var(--gold);font-size:12px}
 #reader{width:100%;max-width:520px;margin:0 auto;min-height:260px;background:#000}
 #res{margin:12px;padding:16px;border-radius:14px;background:#1b2b24;text-align:center;font-size:15px;color:#b8cbc2;transition:background .2s}
 #res b{display:block;font-size:22px;color:#fff;margin-bottom:2px}
-#res img{display:block;width:84px;height:112px;object-fit:cover;border-radius:10px;border:2px solid rgba(255,255,255,.7);margin:0 auto 8px}
 #res.ok{background:var(--ok)}#res.ok *{color:#fff}
 #res.bad{background:var(--bad)}#res.bad *{color:#fff}
+#res img.ph{display:block;width:96px;height:128px;object-fit:cover;object-position:50% 20%;border-radius:12px;margin:0 auto 10px;border:2px solid rgba(255,255,255,.7)}
 .row{display:flex;gap:8px;margin:0 12px 10px}
 select,input{flex:1;min-width:0;padding:12px;border-radius:10px;border:0;font-size:16px}
 button.act{padding:12px 16px;border:0;border-radius:10px;font-weight:700;font-size:15px;background:var(--g7);color:#fff}
@@ -51,13 +51,10 @@ if (q.get('t')) {                       // simpan lalu hapus token dari address 
   history.replaceState(null, '', location.pathname);
 }
 const TOKEN = SS.get('t'), EXEC = SS.get('u');
+const PH = {}; let seq = 0;   // PH[nis] = data URL foto, atau '-' bila tidak ada
 let MODE = SS.get('m') === 'pulang' ? 'pulang' : 'masuk', facing = 'environment', scanner = null, last = '', lastAt = 0, ctx = null;
 
-function show(cls, title, msg, foto) {
-  const r = $('#res'); r.className = cls; r.innerHTML = '<img alt="" hidden><b></b><span></span>';
-  if (foto) { r.children[0].src = foto; r.children[0].hidden = false; }
-  r.children[1].textContent = title; r.children[2].textContent = msg || '';
-}
+function show(cls, title, msg) { const r = $('#res'); r.className = cls; r.innerHTML = '<b></b><span></span>'; r.firstChild.textContent = title; r.lastChild.textContent = msg || ''; }
 function setMode(m) { MODE = m; SS.set('m', m); $('#mMasuk').classList.toggle('on', m === 'masuk'); $('#mPulang').classList.toggle('on', m === 'pulang'); }
 function beep(ok) {
   try {
@@ -75,11 +72,28 @@ async function api(action, p) {
   return j.data;
 }
 
+async function loadPh(list) {
+  list = [...new Set(list)].filter(n => !(n in PH));
+  for (let i = 0; i < list.length; i += 10) {
+    const ch = list.slice(i, i + 10);
+    try { const m = await api('foto.get', { nisList: ch }); ch.forEach(n => { PH[n] = m[n] || '-'; }); } catch (e) {}
+  }
+}
+function showPh(nis) {
+  const f = PH[nis], r = $('#res');
+  if (f && f !== '-' && !r.querySelector('img')) { const im = document.createElement('img'); im.className = 'ph'; im.alt = ''; im.src = f; r.prepend(im); }
+}
+async function prefetch() {   // muat foto satu kelas di latar belakang agar muncul instan saat discan
+  try { const d = await api('absen.list', { kelas: $('#kls').value }); await loadPh(d.rows.filter(x => x.foto).map(x => x.nis)); } catch (e) {}
+}
+
 async function submit(nis) {
   if (!$('#kls').value) { show('bad', 'Pilih kelas dulu', ''); return; }
   try {
     const [r] = await api('absen.batch', { kelas: $('#kls').value, mode: MODE, nisList: [nis] });
-    show(r.ok ? 'ok' : 'bad', r.nama || nis, r.msg, r.foto); beep(r.ok);
+    show(r.ok ? 'ok' : 'bad', r.nama || nis, r.msg); beep(r.ok);
+    const my = ++seq;
+    if (r.nama) { if (PH[nis] === undefined) loadPh([nis]).then(() => { if (my === seq) showPh(nis); }); else showPh(nis); }
     const li = document.createElement('li'); li.className = r.ok ? 'ok' : 'bad';
     li.innerHTML = '<span></span><span></span>'; li.children[0].textContent = r.nama || nis; li.children[1].textContent = r.msg;
     $('#log').prepend(li); while ($('#log').children.length > 10) $('#log').lastChild.remove();
@@ -105,16 +119,15 @@ async function startCam() {
 async function init() {
   if (!TOKEN || !EXEC) { show('bad', 'Tautan tidak lengkap', 'Buka halaman ini lewat tombol “Buka scanner HP” di aplikasi absensi.'); return; }
   try {
-    const list = await api('kelas.list', { untuk: 'absen' });
-    if (!list.length) { show('bad', 'Tidak ada kelas untuk diabsen', 'Akun ini belum memiliki kelas yang diajar. Hubungi admin.'); return; }
+    const list = await api('kelas.list');
     $('#kls').innerHTML = list.map(k => `<option>${k.replace(/[&<>"]/g, '')}</option>`).join('');
     const k = SS.get('k'); if (k && list.includes(k)) $('#kls').value = k;
   } catch (e) { show('bad', 'Tidak bisa terhubung', e.message); return; }
-  setMode(MODE); startCam();
+  setMode(MODE); startCam(); prefetch();
 }
 $('#mMasuk').onclick = () => setMode('masuk');
 $('#mPulang').onclick = () => setMode('pulang');
-$('#kls').onchange = e => SS.set('k', e.target.value);
+$('#kls').onchange = e => { SS.set('k', e.target.value); prefetch(); };
 $('#flip').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; startCam(); };
 $('#mf').onsubmit = e => { e.preventDefault(); const n = $('#nis').value.trim(); if (n) { $('#nis').value = ''; submit(n); } };
 init();
